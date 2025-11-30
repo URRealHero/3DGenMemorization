@@ -39,7 +39,7 @@ def sanitize_group_name(parts: tuple[str, ...]) -> str:
     """Make a filesystem-friendly name from a tuple of path parts."""
     if not parts:
         return "root"
-    raw = "__".join(parts)  # preserve hierarchy visually
+    raw = "__".join(parts)
     return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in raw)
 
 
@@ -90,7 +90,6 @@ def process_group(
       - "path": use the path component at model_id_level (old behavior).
       - "filename": use the file stem as model_id (for flattened dirs).
     """
-    # Resolve output paths for this group and skip early if allowed
     group_label = "/".join(group_key) if group_key else "root"
     group_name, matrix_path, meta_path = output_paths_for_group(output_dir, output_prefix, group_key)
     if not overwrite and outputs_exist(matrix_path, meta_path):
@@ -117,7 +116,7 @@ def process_group(
         # Determine model_id
         if model_id_from == "filename":
             model_id = p.stem
-        else:  # "path" (default, legacy behavior)
+        else:  # "path" (default)
             rel_parts = rel_path.parts
             if len(rel_parts) <= model_id_level:
                 print(f"[WARN] Skipping {p}, path too short for model_id_level {model_id_level}")
@@ -244,7 +243,6 @@ def main():
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine search pattern
     if args.pattern:
         search_glob = args.pattern
         print(f"[INFO] Using glob pattern '{search_glob}' to discover embedding files.")
@@ -265,7 +263,6 @@ def main():
     # Build groups by the first `keep_level` directory parts (relative to db_root)
     groups: dict[tuple[str, ...], list[Path]] = defaultdict(list)
     for p in found:
-        # Optional filename substring filter
         if args.name_substring and args.name_mode:
             contains = args.name_substring in p.name
             if args.name_mode == "include" and not contains:
@@ -274,11 +271,11 @@ def main():
                 continue
 
         rel = p.relative_to(db_root)
-        parts = rel.parts[:-1]  # exclude filename
+        parts = rel.parts[:-1]
         if len(parts) < args.keep_level:
             print(f"[WARN] Skipping {p} (depth {len(parts)} < keep_level {args.keep_level})")
             continue
-        key = tuple(parts[:args.keep_level])  # () for keep_level==0
+        key = tuple(parts[:args.keep_level])
         groups[key].append(p)
     if not groups:
         print(f"[ERROR] No groups formed for keep_level={args.keep_level}. Nothing to do.")

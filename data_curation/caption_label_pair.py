@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# Requires: transformers>=4.51.0, torch>=2.1, tqdm
 import argparse, csv, json, math, random, sys, subprocess
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -12,9 +10,6 @@ from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 from collections import Counter
 
-# ---------------------------
-# Pooling & helpers (Qwen doc pattern)
-# ---------------------------
 def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
     if left_padding:
@@ -41,12 +36,9 @@ def wc_count_lines(p: Path) -> Optional[int]:
         except Exception:
             return None
 
-# ---------------------------
-# Prompt templates (bi-encoder)
-# ---------------------------
 CLASSIFY_TASK = "Given an object description, classify it into one of the fine-grained object classes."
 def make_query_text(desc: str) -> str:
-    return f"Instruct: {CLASSIFY_TASK}\nQuery: task: classification | The description is: {desc}"
+    return f"Instruct: {CLASSIFY_TASK}\nThe description is: {desc}"
 
 LABEL_TEMPLATES = [
     "class label: {name}",
@@ -56,16 +48,12 @@ LABEL_TEMPLATES = [
 def make_label_prompts(name: str) -> List[str]:
     return [tpl.format(name=name) for tpl in LABEL_TEMPLATES]
 
-# ---------------------------
-# Model and encoding
-# ---------------------------
 def build_model(model_name: str, device: str, dtype: str, use_flash: bool):
     torch_dtype = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[dtype]
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     kw = {}
     if use_flash:
         kw["attn_implementation"] = "flash_attention_2"
-    # transformers>=4.51.0 prefers dtype=; fall back to torch_dtype for older versions
     try:
         model = AutoModel.from_pretrained(model_name, dtype=torch_dtype, **kw).to(device)
     except TypeError:
@@ -102,8 +90,6 @@ def encode_texts(tokenizer, model, texts: List[str], max_length: int, batch_size
             if "CUDA out of memory" in str(e) and cur_bs > 8:
                 torch.cuda.empty_cache()
                 cur_bs = max(8, cur_bs // 2)
-                # rewind the iterator step to retry this span with smaller batch
-                # build a fresh iterator from this index with the reduced bs
                 remaining = list(range(i, n, cur_bs))
                 if progress_desc:
                     i_iter = iter(tqdm(remaining, desc=f"{progress_desc} (mb={cur_bs})", dynamic_ncols=True))
@@ -136,9 +122,7 @@ def load_bank_npz(npz_path: Path, device: str) -> Tuple[Tensor, List[str], List[
     meta = json.loads(str(data["metadata"]))
     return bank, list(meta["labels_raw"]), list(meta["labels_canonical"]), meta
 
-# ---------------------------
-# Stats
-# ---------------------------
+
 class Stats:
     def __init__(self, nbins=50):
         self.nbins=nbins
@@ -251,10 +235,9 @@ def main():
             nonlocal kept_so_far, processed
             if not buf_caps:
                 return
-            # encode queries with instruction
             q_texts = [make_query_text(c) for c in buf_caps]
             Q = encode_texts(tokenizer, model, q_texts, max_length=args.max_length, batch_size=args.batch,
-                             device=args.device, progress_desc=None)  # progress via outer tqdm
+                             device=args.device, progress_desc=None)
             # cosine sim vs bank
             S = Q @ bank.T  # [B, C]; both sides L2-normalized
             vals, idxs = torch.max(S, dim=1)
@@ -272,7 +255,6 @@ def main():
             kept_so_far += kept_batch
             processed += len(buf_caps)
 
-        # stream
         for row in r:
             if not row:
                 if args.progress: pbar.update(1)
@@ -295,7 +277,6 @@ def main():
                     print(f"[progress] proc={processed:,} kept={kept_so_far:,} acc_rate={acc:.4f}", flush=True)
                 buf_uids.clear(); buf_caps.clear()
 
-        # tail
         flush_batch()
         if args.progress:
             pbar.update(len(buf_caps))
@@ -305,7 +286,6 @@ def main():
           f"evaluated={stats.evaluated_rows} kept={stats.kept_rows} "
           f"accept_rate={stats.kept_rows/max(1,stats.evaluated_rows):.4f} (thr={args.threshold:.3f})", flush=True)
 
-    # write stats files
     prefix = Path(args.stats_prefix) if args.stats_prefix else out_csv.with_suffix("")
     meta.update({
         "threshold": args.threshold,

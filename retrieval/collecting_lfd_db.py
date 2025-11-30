@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Build lightweight LFD DBs (art/fd/cir/ecc + meta) from:
   A) a TXT list of feature dirs (legacy mode), and/or
@@ -45,19 +44,12 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
-# project root so we can import your loader
-# sys.append
 from lfd_utils.lfd_batch_loader import LFDBatchLoader
 
 ART_SUFFIX = "_q8_v1.8.art"
 
-# A DB is considered "already built" if its meta file exists (fast + robust).
 def db_exists(out_dir: Path) -> bool:
     return (out_dir / "lfd_db_meta.json").exists()
-
-# --------------------------
-# Helpers
-# --------------------------
 
 def load_lines(p: Path) -> List[Path]:
     with p.open("r", encoding="utf-8") as f:
@@ -93,9 +85,6 @@ def derive_meta(dir_path: Path, *, relbase: Path | None, infer_shapenet: bool, m
         relpath = str(dir_path)
     return {"model_id": model_id, "category_id": category_id, "relpath": relpath}
 
-# --------------------------
-# Child: load one directory
-# --------------------------
 
 def _child_load_one(dir_path: Path, device: str, out_npz: Path):
     """Run in a separate interpreter to avoid propagating segfaults."""
@@ -117,21 +106,16 @@ def _child_load_one(dir_path: Path, device: str, out_npz: Path):
 def child_entry() -> bool:
     if os.environ.get("LFD_CHILD") != "1":
         return False
-    # minimal arg passing via env for simplicity
-    dir_path = Path(os.environ["LFD_DIR"])  # required
+    dir_path = Path(os.environ["LFD_DIR"])
     device   = os.environ.get("LFD_DEVICE","cpu")
-    out_npz  = Path(os.environ["LFD_NPZ"])  # required
+    out_npz  = Path(os.environ["LFD_NPZ"])
     try:
         _child_load_one(dir_path, device, out_npz)
     except Exception as e:
-        # print to stderr so parent can see why we failed
         print(f"[CHILD-ERROR] {dir_path}: {e}", file=sys.stderr)
         sys.exit(2)
     sys.exit(0)
 
-# --------------------------
-# Core build routine (one DB)
-# --------------------------
 
 def build_db_for_dirs(
     dirs: List[Path],
@@ -146,7 +130,6 @@ def build_db_for_dirs(
 ) -> Tuple[int, Tuple[int, ...], Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Filter: must contain the .art file to avoid guaranteed crashes
     dirs = [d for d in dirs if d.is_dir() and has_art(d)]
     if not dirs:
         print("[WARN] No valid feature dirs for this group; skipping.")
@@ -154,7 +137,6 @@ def build_db_for_dirs(
 
     print(f"[INFO] Building LFD DB at {out_dir} from {len(dirs)} directories (isolate={isolate}, workers={workers})")
 
-    # Warm-up test in parent too (fast fail if the C++ binding is broken)
     try:
         LFDBatchLoader(device=device).get_global_tensors()
     except Exception as e:
@@ -184,8 +166,7 @@ def build_db_for_dirs(
             except Exception as e:
                 print(f"[WARN] load failed for {d}: {e}", file=sys.stderr)
     else:
-        # Robust path: one child per dir. Launch up to --workers children at a time.
-        pend: List[Tuple[subprocess.Popen, Path, Path]] = []  # (proc, dir, npz)
+        pend: List[Tuple[subprocess.Popen, Path, Path]] = []
 
         def reap_finished(block: bool = False):
             nonlocal ok
@@ -198,7 +179,6 @@ def build_db_for_dirs(
                     if rc is None:
                         i += 1
                         continue
-                    # finished
                     stdout, stderr = p.communicate()
                     pend.pop(i)
                     if rc == 0 and npz.exists():
@@ -212,7 +192,6 @@ def build_db_for_dirs(
                             ok += 1
                         except Exception as e:
                             print(f"[WARN] failed to read child npz for {d}: {e}", file=sys.stderr)
-                    # cleanup temp npz
                     try:
                         npz.unlink(missing_ok=True)
                     except Exception:
@@ -222,7 +201,6 @@ def build_db_for_dirs(
                     return
                 if not block:
                     return
-                # block until any child finishes
                 if pend:
                     pend[0][0].wait()
                 else:
@@ -242,10 +220,8 @@ def build_db_for_dirs(
             })
             p = subprocess.Popen([sys.executable, __file__], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             pend.append((p, d, npz))
-            # throttle to --workers
             while len(pend) >= workers:
                 reap_finished(block=True)
-        # drain remaining
         while pend:
             reap_finished(block=True)
 
@@ -253,7 +229,6 @@ def build_db_for_dirs(
         print("[WARN] No directories loaded successfully for this group; skipping.")
         return 0, (), (), (), ()
 
-    # Stack and save
     art = torch.cat(art_list, dim=0)
     fd  = torch.cat(fd_list,  dim=0)
     cir = torch.cat(cir_list, dim=0)
@@ -275,9 +250,6 @@ def build_db_for_dirs(
 
     return ok, tuple(art.shape), tuple(fd.shape), tuple(cir.shape), tuple(ecc.shape)
 
-# --------------------------
-# Discovery (db_root mode)
-# --------------------------
 
 def discover_feature_dirs(db_root: Path) -> List[Path]:
     """Return all leaf feature directories by scanning for files matching ART_SUFFIX and
@@ -293,22 +265,18 @@ def discover_feature_dirs(db_root: Path) -> List[Path]:
             leaves.append(parent)
     return leaves
 
-# --------------------------
-# Parent main
-# --------------------------
 
 def main():
-    # If we are invoked as a child, run and exit.
-    if child_entry():  # no-op unless LFD_CHILD=1
+    if child_entry():
         return
 
     ap = argparse.ArgumentParser("Build LFD DB(s) from a list of feature dirs and/or a db_root tree (robust)")
 
     # Sources (you may provide either or both). If both are provided,
-    # we will use the list as the *source* of leaf dirs and group relative to db_root.
+    # we will use the list as the source of leaf dirs and group relative to db_root.
     ap.add_argument("--gen_list", type=Path, help="TXT file with absolute paths to leaf feature dirs (one per line)")
     ap.add_argument("--db_root",  type=Path, help="Root directory to scan for leaf feature dirs (used for discovery and/or grouping)")
-
+    
     ap.add_argument("--out_dir",  type=Path, required=True, help="Output root directory for DB(s)")
     ap.add_argument("--relbase",  type=Path, default=None, help="Base path to make meta.relpath relative to (default: db_root if provided)")
 
@@ -338,15 +306,13 @@ def main():
     if args.gen_list is None and args.db_root is None:
         print("[ERROR] Provide --gen_list and/or --db_root")
         sys.exit(1)
-
-    # Default relbase to db_root for nicer meta paths when scanning/grouping
+        
     relbase: Path | None = args.relbase or args.db_root
 
     total_ok = 0
     group_count = 0
     skipped_groups = 0
 
-    # Build the candidate leaf dirs
     leaf_dirs: List[Path] = []
     if args.gen_list is not None:
         lst = load_lines(args.gen_list)
@@ -356,7 +322,6 @@ def main():
         print(f"[INFO] Loaded {len(lst)} leaf dirs from --gen_list")
 
     if args.db_root is not None and args.gen_list is None:
-        # Only discover from db_root if no list is given (when list is given, it is the source of truth)
         db_root: Path = args.db_root
         if not db_root.exists() or not db_root.is_dir():
             print(f"[ERROR] --db_root not found or not a dir: {db_root}")

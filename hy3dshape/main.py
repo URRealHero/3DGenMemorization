@@ -15,12 +15,9 @@ from pytorch_lightning.utilities import rank_zero_info
 from omegaconf import OmegaConf, DictConfig
 from einops._torch_specific import allow_ops_in_compiled_graph
 
-# --- Project Imports ---
-# Ensure these modules exist in your codebase
 from hy3dshape.utils import get_config_from_file, instantiate_from_config
 from hy3dshape.utils.trainings.force_resume_counters import ForceResumeCounters
 
-# --- Torch Dynamo & Warning Configuration ---
 warnings.filterwarnings("ignore", category=UserWarning, module="torch._dynamo")
 torch._dynamo.config.cache_size_limit = 64
 torch._dynamo.config.force_parameter_static_shapes = False 
@@ -42,12 +39,12 @@ def infer_resume_step_from_ckpt_path(path: Optional[str]) -> Optional[int]:
     pat_checkpoint_k = re.compile(r'checkpoint-(\d+)[kK]\b')
 
     for comp in parts:
-        # 1) ckpt-step=XXXXX(.ckpt)
+        # ckpt-step=XXXXX(.ckpt)
         m = pat_ckpt_step.search(comp)
         if m:
             return int(m.group(1))
 
-        # 2) checkpoint-XXXK / checkpoint-XXXk
+        # checkpoint-XXXK / checkpoint-XXXk
         m = pat_checkpoint_k.search(comp)
         if m:
             return int(m.group(1)) * 1000
@@ -89,7 +86,6 @@ class DynamoResetCallback(pl.Callback):
 def setup_callbacks(config: DictConfig) -> Tuple[List[Callback], Logger]:
     training_cfg = config.training
     
-    # Ensure output_dir exists, default to local if missing
     out_dir = training_cfg.get("output_dir", "outputs")
     basedir = Path(out_dir)
     os.makedirs(basedir, exist_ok=True)
@@ -135,34 +131,32 @@ def setup_callbacks(config: DictConfig) -> Tuple[List[Callback], Logger]:
 def merge_cfg(cfg, arg_cfg):
     """Merges command line arguments into the config.training dictionary."""
     for key in arg_cfg.keys():
-        if arg_cfg[key] is not None: # Only merge if argument is provided
+        if arg_cfg[key] is not None:
             if key in cfg.training or key == "output_dir":
                 cfg.training[key] = arg_cfg[key]
-    # Ensure nested structure reflects updates
     cfg.training = DictConfig(cfg.training)
     return cfg
 
 
 def get_args():
     parser = argparse.ArgumentParser()
-    # Runtime optimizations
     parser.add_argument("--fast", action='store_true', help="Enable TF32 and other speedups")
     
-    # Config & Environment
+    # config & environment
     parser.add_argument("-c", "--config", type=str, required=True, help="Path to YAML config")
     parser.add_argument("-s", "--seed", type=int, default=0)
     parser.add_argument("-nn", "--num_nodes", type=int, default=1)
     parser.add_argument("-ng", "--num_gpus", type=int, default=1)
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory")
 
-    # Training Hyperparams
+    # training hyperparams
     parser.add_argument("-u", "--update_every", type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument("-st", "--steps", type=int, default=50000000)
     parser.add_argument("-lr", "--base_lr", type=float, default=4.5e-6)
     parser.add_argument("-a", "--use_amp", default=False, action="store_true")
     parser.add_argument("--amp_type", type=str, default="16", choices=["16", "bf16", "32"])
     
-    # Checkpointing & Logging
+    # checkpointing & logging
     parser.add_argument("--gradient_clip_val", type=float, default=None)
     parser.add_argument("--gradient_clip_algorithm", type=str, default="norm")
     parser.add_argument("--every_n_train_steps", type=int, default=50000)
@@ -171,7 +165,7 @@ def get_args():
     parser.add_argument("--limit_val_batches", type=int, default=64)
     parser.add_argument("--monitor", type=str, default="val/total_loss")
     
-    # Resuming / Strategies
+    # resuming / strategies
     parser.add_argument("--ckpt_path", type=str, default="", help="Path to resume full training state")
     parser.add_argument("--init_ckpt", type=str, default="", help="Path to load weights only")
     parser.add_argument("--deepspeed", default=False, action="store_true", help="Use DeepSpeed Stage 1")
@@ -186,18 +180,14 @@ if __name__ == "__main__":
     
     args = get_args()
     
-    # 1. Performance Optimizations
     if args.fast:
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision('medium')
-        # Helps with NFS/Cloud storage latency
         torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.05
 
-    # 2. Seed
     pl.seed_everything(args.seed, workers=True)
 
-    # 3. Configuration
     config = get_config_from_file(args.config)
     config = merge_cfg(config, vars(args))
     training_cfg = config.training
@@ -206,28 +196,23 @@ if __name__ == "__main__":
     rank_zero_info(OmegaConf.to_yaml(config))
     rank_zero_info("Finish print ...")
 
-    # 4. Setup
     callbacks, loggers = setup_callbacks(config)
     data: pl.LightningDataModule = instantiate_from_config(config.dataset)
     model: pl.LightningModule = instantiate_from_config(config.model)
 
-    # 5. Weights Loading (Custom init)
     if training_cfg.get("init_ckpt"):
         rank_zero_info(f"Loading weights from {training_cfg.init_ckpt}")
-        # Note: Ensure your LightningModule implements load_weights_only
         model.load_weights_only(training_cfg.init_ckpt)
         step = infer_resume_step_from_ckpt_path(training_cfg.init_ckpt)
         if step is not None:
             model.resume_step = step
     
-    # 6. Environment & Learning Rate
     nodes = args.num_nodes
     ngpus = args.num_gpus
     base_lr = training_cfg.base_lr
     accumulate_grad_batches = training_cfg.update_every
     batch_size = config.dataset.params.batch_size
 
-    # Auto-detect cluster environment
     if 'SLURM_NNODES' in os.environ:
         nodes = int(os.environ['SLURM_NNODES'])
     elif 'NNODES' in os.environ:
@@ -246,7 +231,6 @@ if __name__ == "__main__":
         rank_zero_info("++++ NOT USING LR SCALING ++++")
         rank_zero_info(f"Setting learning rate to {model.learning_rate:.2e}")
 
-    # 7. Strategy Selection
     strategy = None
     if args.num_nodes > 1 or args.num_gpus > 1:
         if args.deepspeed:
@@ -257,18 +241,16 @@ if __name__ == "__main__":
             # Standard DDP
             strategy = DDPStrategy(find_unused_parameters=False, bucket_cap_mb=400, static_graph=True)
 
-    # 8. Precision Check
     rank_zero_info(f'*' * 100)
     if training_cfg.use_amp:
         amp_type = training_cfg.amp_type
         assert amp_type in ['bf16', '16', '32'], f"Invalid amp_type: {amp_type}"
         rank_zero_info(f'Using {amp_type} precision')
     else:
-        amp_type = "32-true" # Explicit pytorch lightning string for 32 bit
+        amp_type = "32-true"
         rank_zero_info(f'Using 32 bit precision')
     rank_zero_info(f'*' * 100)
 
-    # 9. Trainer
     trainer = pl.Trainer(
         max_steps=training_cfg.steps,
         precision=amp_type,
@@ -288,6 +270,5 @@ if __name__ == "__main__":
         num_sanity_val_steps=0
     )
 
-    # 10. Start Training
     ckpt_path = training_cfg.ckpt_path if training_cfg.ckpt_path else None
     trainer.fit(model, datamodule=data, ckpt_path=ckpt_path)

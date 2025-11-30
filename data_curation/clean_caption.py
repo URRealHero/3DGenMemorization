@@ -14,7 +14,7 @@ Given (label, caption), decide if the caption predominantly and concretely descr
 
 STRICT RUBRIC (all must be true for KEEP=YES):
 1) SINGLE OBJECT: Caption is about a single object instance, not a set/row/collection/scene/room/environment.
-2) LABEL DOMINATES: The main described entity is the label; the label isn’t just a small part of something else.
+2) LABEL DOMINATES: The main described entity is the label; the label isn't just a small part of something else.
 3) NOT PART-ONLY: The description is not mainly a part-of-object (e.g., “table leg”, “door handle”), unless the label itself is such a part class.
 4) WHEN UNSURE, SAY NO. It is better to kill the innocent by mistake than to let the guilty go free.
 
@@ -35,7 +35,6 @@ ATTENTION_SUFFIX = """\n\nATTENTION: Return exactly ONE line of VALID JSON with 
 No prose. No markdown. No extra text. If unsure, set "keep":"no" and "simple_caption":"".
 """
 
-# Lexicons
 COLOR_WORDS = r"(?i)\b(white|black|red|green|blue|yellow|purple|violet|orange|pink|brown|grey|gray|silver|gold|beige|maroon|navy|teal|cyan|magenta|turquoise)\b"
 MATERIAL_WORDS = r"(?i)\b(wood|wooden|metal|metallic|steel|iron|aluminum|aluminium|plastic|rubber|leather|glass|ceramic|stone|concrete|fabric|cloth|carbon( fiber)?|bronze|brass|copper|gold(en)?|silver(y)?)\b"
 
@@ -104,19 +103,17 @@ def _detect_existing_fieldnames(path: Path) -> List[str]:
             r = csv.DictReader(f)
             if r.fieldnames:
                 return list(r.fieldnames)
-    return ["uid","keep","caption","label"]  # prefer new 4-col schema
+    return ["uid","keep","caption","label"]
 
 def ensure_header(path: Path):
     if not path.exists() or path.stat().st_size == 0:
         with path.open("w", newline="", encoding="utf-8") as f:
-            # write 4-col by default for new files
             w = csv.DictWriter(f, fieldnames=["uid","keep","caption","label"])
             w.writeheader()
 
 def append_rows(path: Path, rows: List[dict]):
     fieldnames = _detect_existing_fieldnames(path)
     with path.open("a", newline="", encoding="utf-8") as f:
-        # extrasaction="ignore" lets us append to legacy 3-col files safely
         w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         for r in rows:
             w.writerow(r)
@@ -126,7 +123,6 @@ def _final_merge(out_csv: str, in_csv: str, final_csv: str):
     in_path = Path(in_csv)
     final_path = Path(final_csv)
 
-    # Build uid->label map from in_csv
     uid2label: Dict[str, str] = {}
     with in_path.open("r", newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
@@ -136,7 +132,6 @@ def _final_merge(out_csv: str, in_csv: str, final_csv: str):
             if u:
                 uid2label[u] = lab
 
-    # Read existing out_csv (3-col or 4-col), dedupe by uid
     rows_by_uid: Dict[str, dict] = {}
     with out_path.open("r", newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
@@ -149,10 +144,8 @@ def _final_merge(out_csv: str, in_csv: str, final_csv: str):
             lab  = (row.get("label") or "").strip() if "label" in (r.fieldnames or []) else ""
             if not lab:
                 lab = uid2label.get(u, "")
-            # last-write-wins if duplicates
             rows_by_uid[u] = {"uid": u, "keep": keep, "caption": cap, "label": lab}
 
-    # Write final merged 4-col CSV
     with final_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["uid","keep","caption","label"])
         w.writeheader()
@@ -186,18 +179,16 @@ def main():
     outp = Path(args.out_csv)
     outp.parent.mkdir(parents=True, exist_ok=True)
 
-    # Resume: read existing uids and ensure header
     seen_uids = read_seen_uids(outp)
     ensure_header(outp)
     pbar = tqdm(total=None, desc="Screening", dynamic_ncols=True)
     with inp.open("r", newline="", encoding="utf-8") as fin:
-        reader = csv.DictReader(fin)  # expects columns: uid, caption, label, sim (others OK)
+        reader = csv.DictReader(fin) 
 
         buf_to_write: List[dict] = []
         processed = 0
         total = 0
 
-        # We stream, batching only those not yet seen
         current_batch_msgs: List[List[dict]] = []
         current_batch_originals: List[dict] = []
 
@@ -220,7 +211,6 @@ def main():
             current_batch_originals.append({"uid":uid, "label":label, "caption":caption})
 
             if len(current_batch_msgs) >= max(1, args.batch):
-                # process a batch
                 results = run_batch(tok, model, current_batch_msgs,
                                     retries=args.retries,
                                     backoff=args.retry_backoff,
@@ -251,7 +241,6 @@ def main():
                 if args.log_every and processed % args.log_every == 0:
                     print(f"[progress] processed={processed} (skipped={len(seen_uids)} total_seen) total_rows={total}", file=sys.stderr)
 
-        # tail batch
         if current_batch_msgs:
             results = run_batch(tok, model, current_batch_msgs,
                                 retries=args.retries,
@@ -291,7 +280,6 @@ def run_batch(tok, model, messages_list: List[List[dict]], retries: int, backoff
         for i in remaining:
             m = messages_list[i]
             if attempt > 0:
-                # mutate the user msg to add ATTENTION
                 m = m[:-1] + [{"role": "user", "content": m[-1]["content"] + ATT}]
             texts.append(tok.apply_chat_template(m, tokenize=False, add_generation_prompt=True))
 
@@ -325,7 +313,6 @@ def run_batch(tok, model, messages_list: List[List[dict]], retries: int, backoff
 
     for idx in remaining:
         results[idx] = None
-    # return in original order
     return [results[i] for i in range(len(messages_list))]
 
 if __name__ == "__main__":

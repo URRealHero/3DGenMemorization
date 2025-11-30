@@ -1,16 +1,8 @@
-#!/usr/bin/env python3
-"""
-Simplified scanner for:
-  - 'mesh'  : *.obj, *.glb, *.gltf
-  - 'uni3d' : uni3d_embedding.npy
-  - 'lfd'   : Valid LFD leaf directories
-"""
-
 import argparse
 from pathlib import Path
 from tqdm import tqdm
 
-# --- Configuration ---
+# config
 MESH_EXTS = ['*.obj', '*.glb', '*.gltf']
 LFD_SUFFIXES = ["_q8_v1.8.art", "_q8_v1.8.cir", "_q8_v1.8.ecc", "_q8_v1.8.fd"]
 UNI3D_FILE = "uni3d_embedding.npy"

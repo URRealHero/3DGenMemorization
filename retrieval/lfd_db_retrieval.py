@@ -1,18 +1,3 @@
-#!/usr/bin/env python3
-"""
-retrieval_lfd_streamed.py
-Multi-GPU, memory-bounded LFD retrieval (Top-K) with streamed LUT gathers.
-
-Run:
-  CUDA_VISIBLE_DEVICES=0,1 python retrieval_lfd_streamed.py \
-      --train_db_dir /path/to/train \
-      --test_db_dir  /path/to/test \
-      --output out.json \
-      --topk 1 \
-      --tgt-chunk 256 \
-      --batch-size 32
-"""
-
 import os, hashlib
 import argparse
 import json
@@ -23,7 +8,6 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
-# --- local utils (drop these files alongside this script) ---
 from lfd_utils.lfd import FastLFDMetric
 from lfd_utils.lfd_batch_loader import LFDBatchLoader
 
@@ -43,7 +27,6 @@ def worker(
     train_db_dir = Path(args.train_db_dir)
     test_db_dir  = Path(args.test_db_dir)
 
-    # Build the metric handler (loads ref DB on device, compact dtypes)
     metric = FastLFDMetric(
         precomputed_db_paths={
             "art":  train_db_dir / "lfd_db_art.pt",
@@ -102,7 +85,6 @@ def worker(
                 print(f"{name} ERROR on {q_id}: {e}")
                 results[q_id] = []
 
-    # persist partial
     out_path = temp_dir / f"results_{proc_id}.json"
     with open(out_path, "w") as f:
         json.dump(results, f)
@@ -127,24 +109,19 @@ def main():
     tokens = [t for t in cvd.split(",") if t]
 
     if tokens:
-        # If they look like plain indices (e.g. "0,1,2"), use them as ints.
         if all(tok.strip().isdigit() for tok in tokens):
             gpus = [int(tok.strip()) for tok in tokens]
         else:
-            # MIG / UUID style: map them to local ordinals 0..N-1
             gpus = list(range(len(tokens)))
     else:
-        # No CVD set; just use all visible devices by ordinal
         gpus = list(range(torch.cuda.device_count()))
 
     print(f"[INFO] Using GPUs (local ordinals): {gpus}")
-    # test set size
     with open(Path(args.test_db_dir) / "lfd_db_meta.json", "r") as f:
         num_queries = len(json.load(f))
     all_q = list(range(num_queries))
     print(f"[INFO] Total queries: {len(all_q)}")
 
-    # round-robin split
     buckets = [[] for _ in range(len(gpus))]
     for i, q in enumerate(all_q):
         buckets[i % len(gpus)].append(q)
@@ -169,15 +146,12 @@ def main():
                 print("[ERROR] A worker crashed; aborting.")
                 return
 
-        # merge BEFORE tempdir is cleaned
         merged = {}
         for i in range(len(gpus)):
             part = tdir_p / f"results_{i}.json"
             if part.exists():
                 with open(part, "r") as f:
                     merged.update(json.load(f))
-
-    # --- write atomically & verify ---
 
     outp = Path(os.path.expanduser(args.output)).resolve()
     outp.parent.mkdir(parents=True, exist_ok=True)
@@ -187,9 +161,8 @@ def main():
         json.dump(merged, f, indent=2)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, outp)  # atomic on POSIX
+    os.replace(tmp, outp) 
 
-    # verify by re-reading
     with open(outp, "r") as f:
         check = json.load(f)
         

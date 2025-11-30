@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
 import argparse
 import numpy as np
 from pathlib import Path
 from numpy.linalg import eigh
 
-# ---------- Math Core ----------
+# ---------- FPD Calculation ----------
 def cov_biased(X: np.ndarray) -> np.ndarray:
     return np.cov(X, rowvar=False, ddof=0).astype(np.float64)
 
@@ -22,7 +21,6 @@ def fd_gaussian(m1, C1, m2, C2, eps: float = 1e-12) -> float:
     S = sqrtm_spd(M, eps=eps)
     return diff2 + float(np.trace(C1 + C2 - 2.0 * S))
 
-# ---------- IO & Main ----------
 def load_array(path: Path) -> np.ndarray:
     if not path.exists(): raise FileNotFoundError(f"{path} missing")
     if path.suffix == ".npy": return np.load(path)
@@ -37,18 +35,16 @@ def main():
     p.add_argument("gen", type=Path, help="Generated .npz/.npy")
     args = p.parse_args()
 
-    # 1. Load
     X_ref = load_array(args.ref).astype(np.float64)
     X_gen = load_array(args.gen).astype(np.float64)
 
     if X_ref.shape[1] != X_gen.shape[1]:
         raise ValueError(f"Dim mismatch: {X_ref.shape[1]} vs {X_gen.shape[1]}")
 
-    # 2. Statistics (User must whiten data before saving npz if needed)
+    # 2. Statistics (you can whiten data before saving npz if needed)
     m_ref, C_ref = X_ref.mean(axis=0), cov_biased(X_ref)
     m_gen, C_gen = X_gen.mean(axis=0), cov_biased(X_gen)
 
-    # 3. Calculate FPD
     score = fd_gaussian(m_ref, C_ref, m_gen, C_gen)
     
     print(f"FPD: {score:.6f}")

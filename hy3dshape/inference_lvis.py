@@ -17,12 +17,9 @@ import torch
 from omegaconf import OmegaConf
 from PIL import Image
 
-# project utils
 from hy3dshape.utils import get_config_from_file, instantiate_from_config
 
-# -------------------------
-# Small utils
-# -------------------------
+# utils
 
 def ensure_dir(p: Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
@@ -152,9 +149,7 @@ def _open_manifest(path: Path, fieldnames: List[str]):
         w.writeheader()
     return f, w
 
-# -------------------------
 # Checkpoint resolution / merging
-# -------------------------
 
 def _is_ds_dir(p: Path) -> bool:
     if not p.is_dir():
@@ -186,7 +181,7 @@ def _find_ds_tag_dir(ds_root: Path) -> Optional[Path]:
 def _canonicalize_ds_for_merge(p: Path) -> Path:
     p = p.resolve()
     if (p / "latest").is_file() and (p / "checkpoint").is_dir():
-        return p  # root
+        return p
     if p.name == "checkpoint" and (p.parent / "latest").is_file():
         return p.parent
     tag = _find_ds_tag_dir(p)
@@ -322,12 +317,9 @@ def _split_blocks(sd: Dict[str, torch.Tensor]) -> Tuple[Dict[str, torch.Tensor],
             den[k2[len("model."):]] = v
         elif k2.startswith("cond_stage_model."):
             cond[k2[len("cond_stage_model."):]] = v
-        # ignore first_stage_model.*
     return den, cond
 
-# -------------------------
 # z-scale recovery / override / std
-# -------------------------
 
 def _extract_z_scale_value(sd: Dict[str, Any]) -> Optional[float]:
     for k in ("z_scale_factor", "module.z_scale_factor", "_forward_module.z_scale_factor"):
@@ -542,9 +534,7 @@ def _auto_z_from_std(model, device, latents: Optional[torch.Tensor] = None,
         print(f"[z-scale] computed from std over {z.numel()} elements -> {z_scale:.6f}")
         return z_scale
 
-# -------------------------
 # Conditioner loading policy & ckpt loader
-# -------------------------
 
 def _should_load_conditioner(final_cond_type: str, mode: str) -> bool:
     if mode == "always":
@@ -612,9 +602,7 @@ def load_only_model_and_conditioner(model, ckpt_arg: str,
         w = emb.embedding.weight.detach().float().cpu()
         print(f"[cond/stats] embedding shape={tuple(w.shape)} mean={w.mean():.6f} std={w.std():.6f}")
 
-# -------------------------
-# CSV / planning
-# -------------------------
+# CSV part
 
 def read_lvis_mapping(json_path: Optional[Path]) -> Optional[Dict[str, int]]:
     if json_path is None:
@@ -694,9 +682,7 @@ def build_inference_plan(num_samples: int, cond_type: str, out_dir: Path, output
 def chunk_indices(idx_list: List[int], chunk: int) -> List[List[int]]:
     return [idx_list[i:i+chunk] for i in range(0, len(idx_list), chunk)]
 
-# -------------------------
 # Image sprite helpers
-# -------------------------
 
 def _pick_view_from_sprite(png_path: str, num_views: int, pick: str, idx: int, rng: random.Random) -> Tuple[Image.Image, int]:
     im = Image.open(png_path)
@@ -725,10 +711,6 @@ def _pick_view_from_sprite(png_path: str, num_views: int, pick: str, idx: int, r
     bottom = min((vidx + 1) * view_h, H)
     crop = im.crop((0, top, W, bottom)).convert("RGB")
     return crop, vidx
-
-# -------------------------
-# Main
-# -------------------------
 
 def parse_args():
     p = argparse.ArgumentParser("Inference with robust ckpt loading (denoiser + optional conditioner).")
@@ -806,7 +788,7 @@ def main():
     assert "model" in cfg, "Config must contain a `model:` section."
     model = instantiate_from_config(cfg.model)
 
-    # VAE sanity (read-only)
+    # VAE 
     try:
         ae = model.first_stage_model
         total = sum(p.numel() for p in ae.parameters())
@@ -822,7 +804,7 @@ def main():
     final_cond_type = resolve_final_cond_type(cfg, raw_cond_type)
     print(f"[cond] raw='{raw_cond_type}' -> final='{final_cond_type}'")
 
-    # ---- ckpt loading policy for conditioner
+    # ckpt loading policy for conditioner
     load_cond_from_ckpt = _should_load_conditioner(final_cond_type, args.cond_from_ckpt_mode)
     if load_cond_from_ckpt:
         print("[policy] conditioner will be loaded from CKPT (class/LVIS or 'always' mode).")
@@ -841,7 +823,6 @@ def main():
         print(f"[ERROR] checkpoint load failed: {e}")
         raise
 
-    # ---- z_scale_factor: CLI -> ckpt -> (optional) STD -> VAE -> default
     z_from_cli = args.z_scale_factor
     z_from_ckpt = None if z_from_cli is not None else _try_load_z_scale_from_ckpt(args.ckpt)
     z_from_std = None
@@ -888,7 +869,6 @@ def main():
                 z_val = float(z_attr.detach().cpu().item() if isinstance(z_attr, torch.Tensor) and z_attr.numel()==1 else z_attr)
                 print(f"[z-scale] not found in ckpt/STD/vae; using model-default {z_val:.6f}")
 
-    # Precision + device
     model = model.to(device)
     if amp_dtype in (torch.bfloat16, torch.float16):
         for p in model.parameters():
@@ -905,7 +885,7 @@ def main():
         model.model = torch.compile(model.model)
         print("[info] torch.compile() enabled.")
 
-    # Manifest prep
+
     manifest_f = None
     manifest_w = None
     manifest_fields = [
@@ -969,7 +949,7 @@ def main():
             manifest_f.close()
         return
 
-    # ---- Batched sampling
+    # Batched sampling
     step = 0
     for batch_ids in chunk_indices(pending_indices, args.batch_size):
         batch_cond_vals: List[Any] = []
@@ -1066,7 +1046,6 @@ def main():
                     else:
                         cond_id = str(conditioning if isinstance(conditioning, int) else batch_cond_vals[k])
                 elif final_cond_type == "image":
-                    # log "spriteName@viewIndex" for quick audit
                     sprite = (rows[csv_row].get("view_path") if args.csv is not None else batch_cond_vals[k]) or ""
                     cond_text = f"{os.path.basename(sprite)}@{picked_views[k]}"
 

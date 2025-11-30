@@ -1,13 +1,9 @@
-#!/usr/bin/env python3
 import json
 import argparse
 import numpy as np
 from pathlib import Path
 from scipy.stats import mannwhitneyu
 
-# ==========================================
-# 1. Exact Reference Implementation
-# ==========================================
 def Zu_from_distances(LPn, LQm): 
     """
     Calculates Z_u using pre-computed distances.
@@ -28,7 +24,6 @@ def Zu_from_distances(LPn, LQm):
         raise ValueError("Input arrays cannot be empty.")
 
     # Get Mann-Whitney U score and manually Z-score it using the conditions of null hypothesis H_0 
-    # Reference: u, _ = mannwhitneyu(LQm, LPn, alternative = 'less')
     u, _ = mannwhitneyu(LQm, LPn, alternative='less')
     
     mean = (n * m / 2) - 0.5 # 0.5 is continuity correction
@@ -37,9 +32,6 @@ def Zu_from_distances(LPn, LQm):
     Z_u = (u - mean) / std 
     return Z_u
 
-# ==========================================
-# 2. JSON Loading Logic
-# ==========================================
 def extract_distances(json_path: Path):
     """
     Extracts 'distance' values from the user's specific JSON format.
@@ -50,8 +42,6 @@ def extract_distances(json_path: Path):
 
     distances = []
     
-    # Check if data is grouped by model (dict of dicts) or flat (dict of entries)
-    # Heuristic: check if the first value is a dict that does NOT have 'distance' key directly
     first_val = next(iter(data.values())) if data else {}
     is_grouped = isinstance(first_val, dict) and "distance" not in first_val
 
@@ -72,9 +62,6 @@ def extract_distances(json_path: Path):
 
     return distances
 
-# ==========================================
-# 3. Main Execution
-# ==========================================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("gen_json", type=Path, help="Path to generated set retrieval JSON (L(Qm))")
@@ -88,7 +75,6 @@ def main():
     print(f"Loaded L(Qm) [Generated]: {len(LQm)} samples")
     print(f"Loaded L(Pn) [Test]     : {len(LPn)} samples")
 
-    # Calculate
     score = Zu_from_distances(LPn, LQm)
 
     print("-" * 30)

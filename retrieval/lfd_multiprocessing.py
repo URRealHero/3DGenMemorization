@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import argparse
 from pathlib import Path
 from multiprocessing import Pool
@@ -11,29 +10,24 @@ import gc
 
 # Add parent directory to path to find lfd_utils
 sys.path.append(str(Path(__file__).parent))
-# print(sys.path)
 
 try:
     from lfd_utils.lfd_me import MeshEncoder
 except ImportError as e:
     raise ImportError("Required module `lfd_utils.lfd_me` not found. Please check your installation.") from e
 
-# Constants for file checking
 LFD_SUFFIXES = ["_q4_v1.8.art", "_q8_v1.8.art", "_q8_v1.8.cir", "_q8_v1.8.ecc", "_q8_v1.8.fd"]
 
 
 def get_outdir_and_prefix(geometry_file: Path) -> tuple[Path, str]:
     g = Path(geometry_file)
     stem = g.stem.lower()
-    # Only exact names are treated as generic (ShapeNet-style)
     generic_exact = {"model", "model_normalized", "mesh"}
 
     if stem in generic_exact:
-        # One folder per UID; prefix is the UID (parent dir)
         prefix = g.parent.name
         out_dir = g.parent / "lfd_feature"
     else:
-        # Per-file outputs; each pose gets its own subdir and prefix
         prefix = g.stem
         out_dir = g.parent / "lfd_feature" / prefix
 
@@ -50,7 +44,6 @@ def encode_single_mesh_to_lfd(geometry_file: Path, force_recompute=False):
     if not geometry_file.exists():
         return False, str(geometry_file), "File not found"
 
-    # NEW: choose per-file subdir & prefix when appropriate
     lfd_output_dir, model_id = get_outdir_and_prefix(geometry_file)
 
     if not force_recompute and all_lfd_files_exist(lfd_output_dir, model_id):
@@ -61,11 +54,8 @@ def encode_single_mesh_to_lfd(geometry_file: Path, force_recompute=False):
     try:
         mesh = trimesh.load(str(geometry_file), process=False)
         if isinstance(mesh, trimesh.Scene):
-            # concatenate scene geometries
             mesh = trimesh.util.concatenate(tuple(mesh.geometry.values()))
-        # ensure we have faces
         if mesh.is_empty or mesh.faces is None or len(mesh.faces) == 0:
-            # attempt a quick fix: to_trimesh() sometimes helps on pure vertex clouds
             try:
                 mesh = mesh.as_trimesh()
             except Exception:
@@ -88,8 +78,7 @@ def encode_single_mesh_to_lfd(geometry_file: Path, force_recompute=False):
 
 def main():
     """
-    Main function to parse arguments and orchestrate multiprocessing LFD extraction
-    by reading a pre-generated list of file paths.
+    Main function to parse arguments and orchestrate multiprocessing LFD extraction by reading a pre-generated list of file paths.
     """
     parser = argparse.ArgumentParser(description="Multiprocessing LFD extractor from a file list.")
     parser.add_argument("--force_recompute", action="store_true", help="Force recomputation even if files exist.")
@@ -97,7 +86,7 @@ def main():
     parser.add_argument("--file_list", type=str, default="NoObjaverse_files.txt", help="Path to the text file containing a list of mesh files.")
     args = parser.parse_args()
 
-    # --- Step 1: Read the pre-generated file list ---
+    # Read the file list
     file_list_path = Path(args.file_list)
     print(f"[INFO] Reading file paths from: {file_list_path}")
 
@@ -108,7 +97,6 @@ def main():
 
     # Use a generator expression for memory efficiency
     with open(file_list_path, 'r') as f:
-        # Read all lines and strip whitespace/newlines
         geometry_files = [Path(line.strip()) for line in f if line.strip()]
 
     if not geometry_files:
@@ -118,12 +106,11 @@ def main():
     print(f"[INFO] Found {len(geometry_files)} files to process.")
     print(f"[INFO] Starting LFD encoding with {args.n_process} processes...")
 
-    # --- Step 2: Start the processing pool ---
+    # Start processing
     process_fn = partial(encode_single_mesh_to_lfd, force_recompute=args.force_recompute)
     success, fail = 0, 0
 
     with Pool(args.n_process) as pool:
-        # Use imap_unordered for efficiency and wrap with tqdm for a progress bar
         results = pool.imap_unordered(process_fn, geometry_files)
         
         for ok, path, message in tqdm(results, total=len(geometry_files), desc="Processing models", unit="file"):

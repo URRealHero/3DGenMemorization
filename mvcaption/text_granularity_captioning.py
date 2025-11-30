@@ -1,44 +1,3 @@
-#!/usr/bin/env python3
-"""
-Multi-view **batch** captioning with Qwen3-VL (8B / 30B A3B MoE)
-
-Input
------
-A metadata CSV with at least the columns:
-- `model_uid`
-- `view_path`   (absolute path to the vertically stacked multi-view image)
-
-Output
-------
-A CSV with two columns: `model_uid, output`
-- `output` is a single-line JSON with keys: `phrase`, `sentence`, `paragraph`.
-
-Resume / Continuation
----------------------
-- By default the script **resumes**: it reads existing `--output_csv` and skips any `model_uid` already present.
-- Writes are **appended per batch** and flushed (with optional fsync) for crash-safe continuation.
-- Use `--overwrite` to start fresh.
-- With `--skip_bad`, errors for individual rows are logged to `--fail-log` (tab-separated: uid <TAB> error).
-
-Example
--------
-python text_granularity_captioning.py \
-  --metadata_csv /path/to/csv \
-  --output_csv /path/to/captions.csv \
-  --num-views 12 \
-  --views-per-sample 4 \
-  --batch-size 32 \
-  --split val --val-view-policy even \
-  --model_id Qwen/Qwen3-VL-8B-Instruct \
-  --dtype bfloat16 --attn_impl flash_attention_2 \
-  --progress --skip_bad --fail-log /path/to/failures.log
-
-Notes
------
-- For Flash-Attn 2, ensure a compatible stack. If unsure, omit --attn_impl or set to sdpa.
-- If your cluster lacks internet, pre-cache the model and run with HF_HUB_OFFLINE=1 or supply --offline.
-"""
-
 import argparse
 import csv
 import os
@@ -49,25 +8,20 @@ from PIL import Image
 import torch
 from transformers import AutoProcessor
 
-# Try to import both classes. We'll pick MoE vs non-MoE based on model_id.
 try:
     from transformers import Qwen3VLMoeForConditionalGeneration
 except Exception:
-    Qwen3VLMoeForConditionalGeneration = None  # type: ignore
+    Qwen3VLMoeForConditionalGeneration = None
 
 try:
     from transformers import Qwen3VLForConditionalGeneration
 except Exception:
-    Qwen3VLForConditionalGeneration = None  # type: ignore
+    Qwen3VLForConditionalGeneration = None
 
 
-# ---------------------------
-# Argument parsing
-# ---------------------------
 def parse_args():
     p = argparse.ArgumentParser(description="Batch caption multi-view images with Qwen3-VL (supports MoE A3B).")
 
-    # IO
     p.add_argument("--metadata_csv", type=str, required=True,
                    help="CSV with at least columns: model_uid, view_path (absolute)")
     p.add_argument("--output_csv", type=str, required=True,
@@ -78,7 +32,7 @@ def parse_args():
     p.add_argument("--path-col", type=str, default="view_path",
                    help="Column name for stacked image absolute path")
 
-    # Model
+    # model configs
     p.add_argument("--model_id", type=str, default="Qwen/Qwen3-VL-8B-Instruct",
                    help="HF model id (default: Qwen/Qwen3-VL-8B-Instruct)")
     p.add_argument("--dtype", type=str, default="auto",
@@ -96,7 +50,7 @@ def parse_args():
     p.add_argument("--cache-dir", type=str, default=None,
                    help="Optional transformers cache dir")
 
-    # Views / selection
+    # views / selection
     p.add_argument("--num-views", type=int, default=12,
                    help="Total views stacked vertically in each input image (V)")
     p.add_argument("--views-per-sample", type=int, default=4,
@@ -107,7 +61,7 @@ def parse_args():
                    help="Policy for selecting views at validation time: "
                         "first | center | even | indices:i,j,k | index:i")
 
-    # Generation
+    # generation configs
     p.add_argument("--max-new-tokens", type=int, default=256,
                    help="Max new tokens to generate")
     p.add_argument("--temperature", type=float, default=0.0,
@@ -115,7 +69,6 @@ def parse_args():
     p.add_argument("--num-beams", type=int, default=1,
                    help="Beam search beams; 1 disables beam search")
 
-    # Batching / control
     p.add_argument("--batch-size", type=int, default=32,
                    help="Batch size for chat-template generation")
     p.add_argument("--skip_bad", action="store_true",
@@ -123,7 +76,7 @@ def parse_args():
     p.add_argument("--progress", action="store_true",
                    help="Show tqdm progress bar")
 
-    # Resume / durability
+    # resume
     p.add_argument("--overwrite", action="store_true", default=False,
                    help="Overwrite output CSV instead of resuming")
     p.add_argument("--fsync-every", type=int, default=1,
@@ -131,19 +84,15 @@ def parse_args():
     p.add_argument("--fail-log", type=str, default=None,
                    help="Optional path to append (uid\\terror) for rows that fail with --skip_bad")
 
-    # Misc
     p.add_argument("--seed", type=int, default=42, help="Random seed")
 
     return p.parse_args()
 
 
-# ---------------------------
-# Utilities
-# ---------------------------
 def set_seed(seed: int):
     random.seed(seed)
     try:
-        import numpy as np  # type: ignore
+        import numpy as np
         np.random.seed(seed)
     except Exception:
         pass
@@ -160,7 +109,6 @@ def pick_model_class(model_id: str):
         return Qwen3VLMoeForConditionalGeneration, "moe"
     if Qwen3VLForConditionalGeneration is not None:
         return Qwen3VLForConditionalGeneration, "base"
-    # Fallback: if imports failed, raise
     raise RuntimeError("Neither Qwen3VLMoeForConditionalGeneration nor Qwen3VLForConditionalGeneration is available.")
 
 
@@ -194,15 +142,13 @@ def load_model_and_processor(model_id: str,
     model = ModelCls.from_pretrained(model_id, **kw)
     processor = AutoProcessor.from_pretrained(model_id, local_files_only=offline, cache_dir=cache_dir)
 
-    # Generation config hygiene
     if getattr(model.generation_config, "pad_token_id", None) is None:
-        model.generation_config.pad_token_id = processor.tokenizer.eos_token_id  # type: ignore
+        model.generation_config.pad_token_id = processor.tokenizer.eos_token_id
 
     # IMPORTANT for batched generation
     if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
-        processor.tokenizer.padding_side = "left"  # type: ignore
+        processor.tokenizer.padding_side = "left"
 
-    # Log actual device map if present
     try:
         print("[INFO] hf_device_map:", getattr(model, "hf_device_map", None))
     except Exception:
@@ -271,7 +217,6 @@ def pick_views(V: int, K: int, split: str, policy: str) -> List[int]:
         base = idx[:1] if idx else [0]
         even = pick_views(V, K - 1, "val", "even")
         return sorted(set(base + even))[:K]
-    # Default evenly spaced indices
     if K == 1:
         return [0]
     xs = [round(i * (V - 1) / (K - 1)) for i in range(K)]
@@ -330,7 +275,7 @@ def generate_batch_captions(
 ) -> List[str]:
     # Ensure left padding for batched generation
     if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
-        processor.tokenizer.padding_side = "left"  # type: ignore
+        processor.tokenizer.padding_side = "left"
 
     inputs = processor.apply_chat_template(
         batch_messages,
@@ -354,7 +299,6 @@ def generate_batch_captions(
     with torch.no_grad():
         generated_ids = model.generate(**inputs, **gen_kwargs)
 
-    # Trim prompt tokens per sample
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -365,11 +309,7 @@ def generate_batch_captions(
         clean_up_tokenization_spaces=False,
     )
 
-    # Compact single-line JSON for CSV
     return [" ".join(t.split()) for t in texts]
-
-
-# --------- Resume helpers / durable IO ----------
 
 def load_processed_uids(out_csv: str) -> Set[str]:
     done: Set[str] = set()
@@ -416,17 +356,13 @@ def append_fail(fail_log: Optional[str], uid: str, err: Exception):
         pass
 
 
-# ---------------------------
-# Main
-# ---------------------------
 def main():
     args = parse_args()
     set_seed(args.seed)
 
-    # Optional progress bar
     if args.progress:
         try:
-            from tqdm import tqdm  # type: ignore
+            from tqdm import tqdm
         except ImportError:
             print("[WARN] tqdm not found; continuing without progress bar. Use pip install tqdm")
             args.progress = False
@@ -443,12 +379,10 @@ def main():
 
     prompt = build_prompt()
 
-    # Prepare output dir
     out_dir = os.path.dirname(args.output_csv)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    # Resume set
     processed: Set[str] = set()
     if not args.overwrite:
         processed = load_processed_uids(args.output_csv)
@@ -494,9 +428,8 @@ def main():
             since_last_fsync = 0
         print(f"[BATCH] wrote {written} rows total")
 
-    # Iterate rows and build batches
     if args.progress:
-        from tqdm import tqdm  # type: ignore
+        from tqdm import tqdm
         row_iter = tqdm(read_metadata_rows(args.metadata_csv, args.uid_col, args.path_col), desc="Captioning")
     else:
         row_iter = read_metadata_rows(args.metadata_csv, args.uid_col, args.path_col)
@@ -510,7 +443,6 @@ def main():
                 if not os.path.exists(img_path):
                     raise FileNotFoundError(f"Image not found: {img_path}")
 
-                # Open + convert under context; keep the converted copy
                 with Image.open(img_path) as raw_im:
                     img = raw_im.convert("RGB")
 
@@ -540,7 +472,6 @@ def main():
                 else:
                     raise
 
-        # Flush remaining
         flush_batch()
     finally:
         try:
