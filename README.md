@@ -112,6 +112,7 @@ python inference.py \
     --image_pick random
 ```
 
+[Pretrained models](https://huggingface.co/pudashi/3DGenMem)
 
 -----
 
