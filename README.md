@@ -59,15 +59,58 @@ python npz_eval.py reference.npz generated.npz
 
 -----
 
-## 2\. Model Training (`hy3dshape/`)
+## 2\. Model (`hy3dshape/`)
 
-The `hy3dshape/` directory contains the implementation of our 3D generative models.
+The `hy3dshape/` directory contains the implementation of our 3D generative models. 
 
 ### Training
-To be added soon.
+Our experiment use the `point_vec1024x32_dim1024_depth24_sdf_nb` in [VecSetX](https://github.com/1zb/VecSetX) autoencoder, to download the pretrained weights, please follow the instructions in the its repository. 
+
+
+We provide a simple training command below. Please modify the configuration file path, output directory, and other parameters as needed.
+```
+python main.py --fast -c PATH/TO/CONFIG.yaml -nn 1 -ng 8 -a --amp_type 32 --output_dir PATH/TO/OUTPUT_DIR (--deepspeed --ckpt_path PATH/TO/CHECKPOINT/FOR/AUTO_RESUME)
+```
+
+You can find example configuration files in `hy3dshape/configs/`.
+Most of the training settings can be modified through the configuration file.
+
 
 ### Inference
-To be added soon.
+We provide simple inference commands below. 
+
+**Text-conditional generation**
+```
+python inference.py \
+    --config configs/Baseline.yaml \
+    --ckpt PATH/TO/CHECKPOINT \
+    --out_dir outputs_text/ \
+    --num_samples 4 \
+    --text "a chair"
+```
+
+**Class-conditional generation**
+Details of the mapping from class names to class IDs can be found in `utils/mapping.json`.
+```
+python inference.py \
+    --config configs/Conditioning/LVIS-16-Category.yaml \
+    --ckpt PATH/TO/CHECKPOINT \
+    --out_dir outputs_lvis/ \
+    --num_samples 4 \
+    --class_id 0
+```
+
+**Image-conditional generation**
+```
+python inference.py \
+    --config configs/Conditioning/Image.yaml \
+    --ckpt PATH/TO/CHECKPOINT \
+    --out_dir outputs_image \
+    --num_samples 1 \
+    --image_path data_sprite.png \
+    --image_views 12 \
+    --image_pick random
+```
 
 
 -----
@@ -87,7 +130,7 @@ We deeply appreciate the open-source contributions that made this research possi
 * **[sdf_gen](https://github.com/1zb/sdf_gen?tab=readme-ov-file)**: Used for mesh normalization and SDF generation processing.
 * **[LFD](https://github.com/kacperkan/light-field-distance) and [GET3D](https://github.com/nv-tlabs/GET3D)**: For Light Field Distance (LFD) implementation.
 * **[data-copying](https://github.com/casey-meehan/data-copying/tree/master)**: The original implementation of the Data Copying Test ($Z_U$), which serves as the core of our memorization evaluation.
-* **[3DShape2Vecset (VecSetX)](https://github.com/1zb/VecSetX)**: For the Vecset autoencoder architecture used in our experiments.
+* **[3DShape2Vecset (VecSetX)](https://github.com/1zb/VecSetX)**: For the Vecset autoencoder used in our experiments.
 * **[Hunyuan3D 2.1](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1)**: For providing the robust diffusion backbone and training framework.
 
 

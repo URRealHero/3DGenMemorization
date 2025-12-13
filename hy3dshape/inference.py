@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# inference_lvis.py
+# inference.py
 # - Robust ckpt resolver: Lightning .ckpt, HF-sharded index.json, merged .bin/.pt, DeepSpeed directories
 # - Loads ONLY denoiser (model.*) and (optionally) conditioner (cond_stage_model.*)
 # - Never loads first_stage_model.* (VAE)
